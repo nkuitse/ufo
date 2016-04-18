@@ -52,7 +52,7 @@ sub prog_ufotimp {
     }
     close $fhsum or fatal "sha256sum: $!";
     open my $fh, '<', "/tmp/ufot.$$.sum" or fatal "open /tmp/ufot.$$.sum: $!";
-    my @import;
+    my @imported;
     while (<$fh>) {
         my ($sum, $f) = split /\s+\*?/, $_, 2;
         chomp $f;
@@ -63,11 +63,12 @@ sub prog_ufotimp {
         else {
             copy $f, $m or fatal "copy $f $m: $!" if !$opt{n};
             print "+ $sum $f\n";
-            push @import, $m;
+            push @imported, $m;
         }
     }
-    foreach my $f (@import) {
-        ;
+    return if $opt{n} || !$opt{x};
+    foreach my $f (@imported) {
+        unlink $f;
     }
 }
 
