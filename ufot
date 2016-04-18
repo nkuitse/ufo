@@ -1,0 +1,79 @@
+#!/usr/bin/perl
+
+use warnings;
+use strict;
+
+use File::Copy qw(move copy);
+use Getopt::Std qw(getopts);
+
+sub usage;
+sub fatal;
+
+my $prog = $0;
+$prog =~ s{.+/}{};
+$prog =~ tr/-/_/;
+
+my $root = $ENV{'PHOTOS'} ||= glob('~/photos');
+my $mroot = "$root/masters";
+my %opt;
+
+&{ __PACKAGE__->can('prog_'.$prog) || usage };
+
+# --- Main functions
+
+sub prog_ufotimp {
+    getopts(':vn', \%opt) or usage;
+    if (@ARGV) {
+        1;  # Nothing to do yet
+    }
+    elsif (-t STDIN) {
+        usage;
+    }
+    else {
+        # Read files from standard input
+        @ARGV = <STDIN>;
+        chomp @ARGV;
+    }
+    open my $fhsum, "| xargs -0 sha256sum > /tmp/ufot.$$.sum" or fatal "sha256sum: $!";
+    while (@ARGV) {
+        my $f = shift @ARGV;
+        if (-d $f) {
+            unshift @ARGV, glob("$f/*");
+        }
+        elsif ($f =~ /\.jpe?g$/i) {
+            print $fhsum $f, "\000";
+        }
+        elsif (-f _) {
+            print STDERR "not a JPEG: $f\n";
+        }
+        else {
+            print STDERR "not a regular file or directory: $f\n";
+        }
+    }
+    close $fhsum or fatal "sha256sum: $!";
+    open my $fh, '<', "/tmp/ufot.$$.sum" or fatal "open /tmp/ufot.$$.sum: $!";
+    my @import;
+    while (<$fh>) {
+        my ($sum, $f) = split /\s+\*?/, $_, 2;
+        chomp $f;
+        my $m = sprintf '%s/%s/%s/%s.jpg', $mroot, substr($sum,0,2), substr($sum,2,2), $sum;
+        if (-e $m) {
+            print "- $sum $f\n" if $opt{v};
+        }
+        else {
+            copy $f, $m or fatal "copy $f $m: $!" if !$opt{n};
+            print "+ $sum $f\n";
+            push @import, $m;
+        }
+    }
+    foreach my $f (@import) {
+        ;
+    }
+}
+
+# --- Other functions
+
+sub fatal {
+    print STDERR $prog, ": @_\n";
+    exit 1;
+}
