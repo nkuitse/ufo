@@ -1,4 +1,6 @@
-install: ufot
-	install ufot /usr/local/bin/
-	rm -f /usr/local/bin/ufotimp
-	ln -s ufot /usr/local/bin/ufotimp
+include config.mk
+
+install: $(PROG)
+	install $(PROG) $(PREFIX)/bin/
+	rm -f $(PREFIX)/bin/$(PROG)imp
+	ln -s $(PROG) $(PREFIX)/bin/$(PROG)imp
