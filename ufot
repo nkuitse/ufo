@@ -22,7 +22,7 @@ my %opt;
 # --- Main functions
 
 sub prog_ufotimp {
-    getopts(':vn', \%opt) or usage;
+    getopts(':xvn', \%opt) or usage;
     if (@ARGV) {
         1;  # Nothing to do yet
     }
