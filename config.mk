@@ -1,2 +1,2 @@
-PROG = ufot
+PROG = ufo
 PREFIX = /usr/local
