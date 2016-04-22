@@ -32,38 +32,25 @@ my %opt;
 sub cmd_import {
     getopts(':h:xXr:vn', \%opt) or usage;
     $opt{x} = 1 if $opt{X};
-    if (@ARGV) {
-        # Nothing special to do
-    }
-    elsif (-t STDIN) {
-        @ARGV = qw(.);
-    }
-    else {
-        # Read files from standard input
-        @ARGV = <STDIN>;
-        chomp @ARGV;
-    }
+    @ARGV = argv2files();
     my $hashf = $opt{h} || "/tmp/ufo.$$.sha256sum";
     if (!$opt{h} || ! -s $hashf) {
         print STDERR "Saving checksums to $hashf";
-        calculate_hashes($hashf, @ARGV);
+        my $hashes = sha256hashes($hashf, @ARGV);
         print STDERR "\n";
     }
     open my $hashfh, '<', $hashf or fatal "open $hashf: $!";
     my (@imported, @already_imported);
     while (<$hashfh>) {
-        my ($sum, $f) = split /\s+\*?/, $_, 2;
+        my ($hash, $f) = split /\s+\*?/, $_, 2;
         chomp $f;
         print "> $f\n";
-        my $ext = $f =~ m{(\.[^/]+)$} ? lc $1 : undef;
-        my $coll = defined $ext ? $ext2coll{$ext} : undef;
-        if (!defined $coll) {
+        my $m = mpath($hash, $f);
+        if (!defined $m) {
             print "? no collection\n" if $opt{v};
             next;
         }
-        my $namer = coll2namer($coll);
-        my $m = $namer->($sum, $ext);
-        if (-e $m) {
+        elsif (-e $m) {
             print "- $m\n";
             push @already_imported, $f if $opt{X};
         }
@@ -82,7 +69,73 @@ sub cmd_import {
     }
 }
 
+sub cmd_check {
+    my @files = argv2files(@ARGV);
+    usage if !@ARGV;
+    my $hashes = sha256hashes(undef, @files);
+    foreach my $f (@files) {
+        my $hash = $hashes->{$f};
+        my $m = mpath($hash, $f);
+        if (!defined $m) {
+            print STDERR "No collection: $f\n";
+        }
+        elsif (-e $m) {
+            print STDERR "- $hash $f\n";
+        }
+        else {
+            print STDERR "+ $hash $f\n";
+        }
+    }
+}
+
 # --- Other functions
+
+sub ext {
+    my ($f) = @_;
+    return if $f !~ m{(\.[^/]+)$};
+    return lc $1;
+}
+
+sub mpath {
+    my ($hash, $f) = @_;
+    my $ext = ext($f) or return;
+    my $coll = $ext2coll{$ext};
+    return if !defined $coll;
+    my $namer = coll2namer($coll);
+    return $namer->($hash, $ext);
+}
+
+sub argv2files {
+    my @argv = @ARGV;
+    my @files;
+    if (@argv) {
+        # Nothing special to do
+    }
+    elsif (-t STDIN) {
+        @argv = qw(.);
+    }
+    else {
+        # Read files from standard input
+        @argv = <STDIN>;
+        chomp @argv;
+    }
+    while (@argv) {
+        my $f = shift @argv;
+        if (-d $f) {
+            unshift @argv, grep {
+                my $ext = ext($_);
+                defined $ext && defined $ext2coll{$ext};
+            } glob("$f/*");
+        }
+        elsif (-f _) {
+            push @files, $f;
+        }
+        else {
+            # Not a file or directory
+        }
+    }
+    return @files;
+}
 
 sub coll2namer {
     my ($coll) = @_;
@@ -112,29 +165,21 @@ sub coll2namer {
     return $coll2namer{$coll} = $namer;
 }
 
-sub calculate_hashes {
-    my $hashf = shift;
-    open my $hashfh, "| xargs -0 sha256sum > $hashf" or fatal "sha256sum: $!";
-    while (@_) {
-        my $f = shift @_;
-        my $ext;
-        if (-d $f) {
-            unshift @_, glob("$f/*");
-        }
-        elsif (-f _) {
-            print $hashfh $f, "\000";
-        }
-        else {
-            print STDERR "not a regular file or directory: $f\n";
-        }
-    }
-    close $hashfh or fatal "sha256sum: $!";
-}
-
 sub sha256hashes {
-}
-
-sub filetypes {
+    my $hashf = shift;
+    return if !@_;
+    my ($hashfh, $procfh, %hash);
+    if (defined $hashf) {
+        open $hashfh, '>', $hashf or fatal "open $hashf: $!";
+    }
+    open $procfh, '-|', 'sha256sum', @_ or fatal "sha256sum: $!";
+    while (<$procfh>) {
+        chomp;
+        my ($hash, $f) = split /\s+\*?/, $_, 2;
+        print $hashfh $_ if defined $hashfh;
+        $hash{$f} = $hash;
+    }
+    return \%hash;
 }
 
 sub fatal {
