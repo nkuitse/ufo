@@ -30,7 +30,18 @@ my %opt;
 # --- Main functions
 
 sub cmd_import {
-    getopts(':h:xXr:vn', \%opt) or usage;
+    getopts(':c:e:h:xXr:vn', \%opt) or usage;
+    if (defined $opt{c}) {
+        if (defined $opt{e}) {
+            %ext2coll = ( $opt{e} => $opt{c} );
+        }
+        else {
+            %ext2coll = ( '' => $opt{c} );
+        }
+    }
+    elsif (defined $opt{e}) {
+        usage;
+    }
     $opt{x} = 1 if $opt{X};
     @ARGV = argv2files();
     my $hashf = $opt{h} || "/tmp/ufo.$$.sha256sum";
@@ -92,14 +103,14 @@ sub cmd_check {
 
 sub ext {
     my ($f) = @_;
-    return if $f !~ m{(\.[^/]+)$};
+    return '' if $f !~ m{(\.[^/]+)$};
     return lc $1;
 }
 
 sub mpath {
     my ($hash, $f) = @_;
-    my $ext = ext($f) or return;
-    my $coll = $ext2coll{$ext};
+    my $ext = ext($f);
+    my $coll = $opt{c} // $ext2coll{$ext};
     return if !defined $coll;
     my $namer = coll2namer($coll);
     return $namer->($hash, $ext);
@@ -123,8 +134,7 @@ sub argv2files {
         my $f = shift @argv;
         if (-d $f) {
             unshift @argv, grep {
-                my $ext = ext($_);
-                defined $ext && defined $ext2coll{$ext};
+                -d $_ || defined $ext2coll{ext($_)}
             } glob("$f/*");
         }
         elsif (-f _) {
