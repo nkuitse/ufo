@@ -6,6 +6,7 @@ use strict;
 use File::Copy qw(move copy);
 use Getopt::Std qw(getopts);
 
+sub hashloop(&$@);
 sub usage;
 sub fatal;
 
@@ -25,12 +26,16 @@ my %coll2namer;
 my $root = $ENV{UFO_ROOT} ||= glob('~/var/ufo') || glob('~/.ufo') || fatal "Can't determine ufo root directory";
 my %opt;
 
-&{ __PACKAGE__->can(@ARGV ? 'cmd_' . shift : usage) || usage };
+@ARGV = qw(help) if !@ARGV;
+my $cmd = shift;
+
+&{ __PACKAGE__->can(@ARGV ? 'cmd_' . $cmd : usage) || usage };
 
 # --- Main functions
 
 sub cmd_import {
-    getopts(':c:e:h:xXr:vn', \%opt) or usage;
+    #@ import [-xXvn] [-c COLL] [-e EXT] [-h FILE] FILE|DIR...
+    getopts(':c:e:h:xXvn', \%opt) or usage;
     if (defined $opt{c}) {
         if (defined $opt{e}) {
             %ext2coll = ( $opt{e} => $opt{c} );
@@ -44,22 +49,13 @@ sub cmd_import {
     }
     $opt{x} = 1 if $opt{X};
     @ARGV = argv2files();
-    my $hashf = $opt{h} || "/tmp/ufo.$$.sha256sum";
-    if (!$opt{h} || ! -s $hashf) {
-        print STDERR "Saving checksums to $hashf";
-        my $hashes = sha256hashes($hashf, @ARGV);
-        print STDERR "\n";
-    }
-    open my $hashfh, '<', $hashf or fatal "open $hashf: $!";
     my (@imported, @already_imported);
-    while (<$hashfh>) {
-        my ($hash, $f) = split /\s+\*?/, $_, 2;
-        chomp $f;
+    hashloop {
+        my ($hash, $f) = @_;
         print "> $f\n";
         my $m = mpath($hash, $f);
         if (!defined $m) {
             print "? no collection\n" if $opt{v};
-            next;
         }
         elsif (-e $m) {
             print "- $m\n";
@@ -70,10 +66,8 @@ sub cmd_import {
             print "+ $m\n";
             push @imported, $f;
         }
-    }
-    continue {
         print "\n";
-    }
+    } $opt{h}, @ARGV;
     return if $opt{n} || !$opt{x};
     foreach my $f (@imported, @already_imported) {
         unlink $f;
@@ -81,25 +75,80 @@ sub cmd_import {
 }
 
 sub cmd_check {
+    #@ check [-pqv] [-h FILE] FILE|DIR...
+    getopts(':h:pqv', \%opt) or usage;
     my @files = argv2files(@ARGV);
     usage if !@ARGV;
-    my $hashes = sha256hashes(undef, @files);
-    foreach my $f (@files) {
-        my $hash = $hashes->{$f};
+    hashloop {
+        my ($hash, $f) = @_;
         my $m = mpath($hash, $f);
         if (!defined $m) {
-            print STDERR "No collection: $f\n";
+            print STDERR "No collection: $f\n" if !$opt{q};
         }
         elsif (-e $m) {
-            print STDERR "- $hash $f\n";
+            print STDERR $opt{p} ? "- $m $f\n"
+                                 : "- $hash $f\n";
+        }
+        elsif ($opt{p}) {
+            print STDERR "+ $m $f\n";
         }
         else {
             print STDERR "+ $hash $f\n";
         }
+    } $opt{h}, @ARGV;
+}
+
+sub cmd_commands {
+    #@ commands :: list all ufo commands
+    goto &usage_commands;
+}
+
+sub cmd_help {
+    #@ help [COMMAND] :: show helpful information
+    goto &usage_commands if !@ARGV || @ARGV == 1 && $ARGV[0] eq 'commands';
+    my ($commands, $wcmd, $wargs) = commands(@ARGV);
+    while (@$commands) {
+        my ($cmd, $args, $desc, @notes) = @{ shift @$commands };
+        print STDERR <<"EOS";
+$prog $cmd $args
+  $desc
+EOS
+        if (@notes) {
+            print '  ', $_, "\n" for @notes;
+        }
+        print STDERR "\n" if @$commands;
     }
 }
 
 # --- Other functions
+
+sub hashloop(&$@) {
+    my $proc = shift;
+    my $hashf = shift;
+    my $unlink;
+    if (!defined $hashf) {
+        $hashf = "/tmp/ufo.$$.sha256sum";
+        $unlink = 1;
+    }
+    my ($fhin, $fhout, %hash);
+    if (-s $hashf) {
+        open $fhin, '<', $hashf or fatal "open $hashf for reading: $!";
+    }
+    else {
+        open $fhout, '>>', $hashf or fatal "open $hashf for writing: $!";
+        print STDERR "Saving checksums to $hashf\n";
+        open $fhin, '-|', 'sha256sum', @_ or fatal "sha256sum: $!";
+    }
+    while (<$fhin>) {
+        print $fhout $_ if defined $fhout;
+        my ($hash, $f) = split /\s+\*?/, $_, 2;
+        chomp $f;
+        $proc->($hash, $f);
+    }
+    close $fhin or fatal "close $hashf: $!";
+    close $fhout or fatal "close $hashf: $!" if defined $fhout;
+    unlink $hashf if $unlink;
+}
 
 sub ext {
     my ($f) = @_;
@@ -175,24 +224,54 @@ sub coll2namer {
     return $coll2namer{$coll} = $namer;
 }
 
-sub sha256hashes {
-    my $hashf = shift;
-    return if !@_;
-    my ($hashfh, $procfh, %hash);
-    if (defined $hashf) {
-        open $hashfh, '>', $hashf or fatal "open $hashf: $!";
+sub usage_commands {
+    my ($commands, $wcmd, $wargs) = commands();
+    print STDERR "usage: $prog COMMAND [ARG]...\n";
+    print STDERR "commands:\n";
+    foreach (@$commands) {
+        printf STDERR "  %-${wcmd}.${wcmd}s %-${wargs}.${wargs}s  %s\n", @$_;
     }
-    open $procfh, '-|', 'sha256sum', @_ or fatal "sha256sum: $!";
-    while (<$procfh>) {
-        chomp;
-        my ($hash, $f) = split /\s+\*?/, $_, 2;
-        print $hashfh $_ if defined $hashfh;
-        $hash{$f} = $hash;
+    exit 1;
+}
+
+sub commands {
+    my %want = map { $_ => 1 } @_;
+    open my $fh, '<', $0 or return;
+    my ($wcmd, $wargs) = (0, 0);
+    my ($lcmd, $largs);
+    my @commands;
+    while (<$fh>) {
+        if (s/^\s*#@ (\S+)(?:\s+(.+))?\s+::\s+(.+)//) {
+            next if %want && !$want{$1};
+            my ($cmd, $args, $desc) = ($1, $2 || '', $3);
+            chomp;
+            ($lcmd, $largs) = (length $cmd, length $args);
+            $wcmd = $lcmd if $lcmd > $wcmd;
+            $wargs = $largs if $largs > $wargs;
+            my @cmd = ($cmd, $args, ucfirst $desc);;
+            push @commands, \@cmd;
+            while (<$fh>) {
+                last if !s/^\s*#@ //;
+                chomp;
+                push @cmd, $_;
+            }
+        }
     }
-    return \%hash;
+    close $fh;
+    return ([ sort { lc $a->[0] cmp lc $b->[0] } @commands ], $wcmd, $wargs);
+}
+
+sub usage {
+    my ($commands, $wcmd, $wargs) = commands();
+    if (my ($c) = grep { $_->[0] eq $cmd } @$commands) {
+        printf STDERR "usage: $prog %s %s\n", @$c[0..1];
+        exit 1;
+    }
+    print STDERR "usage: $prog COMMAND [ARG]...\n";
+    exit 1;
 }
 
 sub fatal {
     print STDERR $prog, ": @_\n";
-    exit 1;
+    exit 2;
 }
