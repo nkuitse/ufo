@@ -49,11 +49,11 @@ sub cmd_import {
     }
     $opt{x} = 1 if $opt{X};
     @ARGV = argv2files();
-    my (@imported, @already_imported);
+    my (@imported, @already_imported, %coll2fh);
     hashloop {
         my ($hash, $f) = @_;
         print "> $f\n";
-        my $m = mpath($hash, $f);
+        my ($c, $m) = mpath($hash, $f);
         if (!defined $m) {
             print "? no collection\n" if $opt{v};
         }
@@ -64,6 +64,12 @@ sub cmd_import {
         else {
             copy $f, $m or fatal "copy $f $m: $!" if !$opt{n};
             print "+ $m $f\n";
+            my $fh = $coll2fh{$c};
+            if (!$fh) {
+                open $fh, '>>', "$root/$c/ufo.log" or fatal "open $root/$c/ufo.log for writing: $!";
+                $coll2fh{$c} = $fh;
+            }
+            print $fh "$m $f\n";
             push @imported, $f;
         }
         print "\n";
@@ -81,7 +87,7 @@ sub cmd_check {
     usage if !@ARGV;
     hashloop {
         my ($hash, $f) = @_;
-        my $m = mpath($hash, $f);
+        my ($c, $m) = mpath($hash, $f);
         if (!defined $m) {
             print STDERR "No collection: $f\n" if !$opt{q};
         }
@@ -162,7 +168,7 @@ sub mpath {
     my $coll = $opt{c} // $ext2coll{$ext};
     return if !defined $coll;
     my $namer = coll2namer($coll);
-    return $namer->($hash, $ext);
+    return ($coll, $namer->($hash, $ext));
 }
 
 sub argv2files {
