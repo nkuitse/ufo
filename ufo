@@ -63,7 +63,7 @@ sub cmd_import {
         }
         else {
             copy $f, $m or fatal "copy $f $m: $!" if !$opt{n};
-            print "+ $m\n";
+            print "+ $m $f\n";
             push @imported, $f;
         }
         print "\n";
