@@ -34,7 +34,7 @@ my $cmd = shift;
 # --- Main functions
 
 sub cmd_import {
-    #@ import [-xXvn] [-c COLL] [-e EXT] [-h FILE] FILE|DIR...
+    #@ import [-xXvn] [-c COLL] [-e EXT] [-h FILE] FILE|DIR... :: import files
     getopts(':c:e:h:xXvn', \%opt) or usage;
     if (defined $opt{c}) {
         if (defined $opt{e}) {
@@ -81,7 +81,7 @@ sub cmd_import {
 }
 
 sub cmd_check {
-    #@ check [-pqv] [-h FILE] FILE|DIR...
+    #@ check [-pqv] [-h FILE] FILE|DIR... :: check to see files have been imported
     getopts(':h:pqv', \%opt) or usage;
     my @files = argv2files(@ARGV);
     usage if !@ARGV;
