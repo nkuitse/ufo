@@ -48,7 +48,8 @@ sub cmd_import {
         usage;
     }
     $opt{x} = 1 if $opt{X};
-    @ARGV = argv2files();
+    my @files = argv2files();
+    usage if !@files;
     my (@imported, @already_imported, %coll2fh);
     hashloop {
         my ($hash, $f) = @_;
@@ -73,7 +74,7 @@ sub cmd_import {
             push @imported, $f;
         }
         print "\n";
-    } $opt{h}, @ARGV;
+    } $opt{h}, @files;
     return if $opt{n} || !$opt{x};
     foreach my $f (@imported, @already_imported) {
         unlink $f;
@@ -83,8 +84,8 @@ sub cmd_import {
 sub cmd_check {
     #@ check [-pqv] [-h FILE] FILE|DIR... :: check to see files have been imported
     getopts(':h:pqv', \%opt) or usage;
-    my @files = argv2files(@ARGV);
-    usage if !@ARGV;
+    my @files = argv2files();
+    usage if !@files;
     hashloop {
         my ($hash, $f) = @_;
         my ($c, $m) = mpath($hash, $f);
@@ -101,7 +102,7 @@ sub cmd_check {
         else {
             print STDERR "+ $hash $f\n";
         }
-    } $opt{h}, @ARGV;
+    } $opt{h}, @files;
 }
 
 sub cmd_commands {
