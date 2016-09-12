@@ -3,6 +3,9 @@
 use warnings;
 use strict;
 
+use File::Spec;
+use Cwd qw(abs_path);
+use File::Basename qw(dirname);
 use File::Copy qw(move copy);
 use Getopt::Std qw(getopts);
 
@@ -19,43 +22,50 @@ my %ext2coll = qw(
     .mp4    videos
     .mpg    videos
     .mpeg   videos
+    .wav    music
 );
+my %coll2dir;
 my %coll2namer;
 
 (my $prog = $0) =~ s{.+/}{};
-my $root = $ENV{UFO_ROOT} ||= glob('~/var/ufo') || glob('~/.ufo') || fatal "Can't determine ufo root directory";
-my %opt;
+
+my (%opt, %conf);
+my $conf = $ENV{UFO_CONF} ||= glob('~/etc/uforc')
+    || glob('~/.uforc') || glob('/etc/ufo/ufo.conf');
+read_conf($conf) if defined $conf;
+
+my $root = $ENV{UFO_ROOT} ||= $conf{root}
+    ||= glob('~/var/ufo') || glob('~/.ufo')
+    || glob('/var/local/ufo')
+    || fatal "Can't determine ufo root directory";
 
 @ARGV = qw(help) if !@ARGV;
-my $cmd = shift;
 
-&{ __PACKAGE__->can(@ARGV ? 'cmd_' . $cmd : usage) || usage };
+my $cmd = shift;
+&{ __PACKAGE__->can('cmd_' . $cmd) || usage };
 
 # --- Main functions
 
 sub cmd_import {
-    #@ import [-xXvn] [-c COLL] [-e EXT] [-h FILE] FILE|DIR... :: import files
-    getopts(':c:e:h:xXvn', \%opt) or usage;
+    #@ import [-xXlvn] [-c COLL] [-e EXT] [-h FILE] FILE|DIR... :: import files
+    getopts(':c:e:h:lxXvn', \%opt) or usage;
+    $opt{e} =~ s/^(?=[^.])/./ if defined $opt{e};
     if (defined $opt{c}) {
-        if (defined $opt{e}) {
-            %ext2coll = ( $opt{e} => $opt{c} );
-        }
-        else {
-            %ext2coll = ( '' => $opt{c} );
-        }
+        $ext2coll{$opt{e} // ''} = $opt{c};
     }
     elsif (defined $opt{e}) {
         usage;
     }
-    $opt{x} = 1 if $opt{X};
+    $opt{x} = 1 if $opt{X} || $opt{l};
     my @files = argv2files();
     usage if !@files;
-    my (@imported, @already_imported, %coll2fh);
+    my (@imported, @already_imported, %link, %coll2fh);
     hashloop {
         my ($hash, $f) = @_;
         print "> $f\n";
-        my ($c, $m) = mpath($hash, $f);
-        if (!defined $m) {
+        my $c = dcoll($f);
+        my $m = mpath($c, $hash, $f);
+        if (!defined $c) {
             print "? no collection\n" if $opt{v};
         }
         elsif (-e $m) {
@@ -63,11 +73,18 @@ sub cmd_import {
             push @already_imported, $f if $opt{X};
         }
         else {
+            my $md = dirname($m);
+            if (!-d $md) {
+                mkdir $md or fatal "mkdir $md: $!";
+            }
             copy $f, $m or fatal "copy $f $m: $!" if !$opt{n};
+            if ($opt{l}) {
+                $link{$f} = File::Spec->abs2rel(abs_path($m), dirname(abs_path($f)));
+            }
             print "+ $m $f\n";
             my $fh = $coll2fh{$c};
             if (!$fh) {
-                open $fh, '>>', "$root/$c/ufo.log" or fatal "open $root/$c/ufo.log for writing: $!";
+                open $fh, '>>', "$c/ufo.log" or fatal "open $c/ufo.log for writing: $!";
                 $coll2fh{$c} = $fh;
             }
             print $fh "$m $f\n";
@@ -78,6 +95,9 @@ sub cmd_import {
     return if $opt{n} || !$opt{x};
     foreach my $f (@imported, @already_imported) {
         unlink $f;
+        if ($opt{l}) {
+            symlink $link{$f}, $f;
+        }
     }
 }
 
@@ -88,7 +108,8 @@ sub cmd_check {
     usage if !@files;
     hashloop {
         my ($hash, $f) = @_;
-        my ($c, $m) = mpath($hash, $f);
+        my $c = dcoll($f);
+        my $m = mpath($c, $hash, $f);
         if (!defined $m) {
             print STDERR "No collection: $f\n" if !$opt{q};
         }
@@ -163,13 +184,20 @@ sub ext {
     return lc $1;
 }
 
-sub mpath {
-    my ($hash, $f) = @_;
+sub dcoll {
+    # Destination collection: where a file belongs
+    my ($f) = @_;
     my $ext = ext($f);
-    my $coll = $opt{c} // $ext2coll{$ext};
-    return if !defined $coll;
-    my $namer = coll2namer($coll);
-    return ($coll, $namer->($hash, $ext));
+    my $c = $opt{c} // $ext2coll{$ext};
+    return if !defined $c;
+    $c =~ s{^(?!/)}{$root/};
+    return $c;
+}
+
+sub mpath {
+    my ($c, $hash, $f) = @_;
+    return if !defined $c;
+    return coll2namer($c)->($hash, ext($f));
 }
 
 sub argv2files {
@@ -204,31 +232,37 @@ sub argv2files {
 }
 
 sub coll2namer {
-    my ($coll) = @_;
-    return $coll2namer{$coll} if defined $coll2namer{$coll};
-    my $mroot = "$root/$coll";
-    my @dirs2 = grep { m{/[0-9a-f]{2}$}i && -d } glob("$mroot/00/??");
-    my @dirs1 = grep { m{/[0-9a-f]{2}$}i && -d } glob("$mroot/??");
+    my ($c) = @_;
+    return $coll2namer{$c} if defined $coll2namer{$c};
+    my @dirs2 = grep { m{/[0-9a-f]{2}$}i && -d } glob("$c/00/??");
+    my @dirs1 = grep { m{/[0-9a-f]{2}$}i && -d } glob("$c/??");
+    my @dirs0 = grep { m{/[0-9a-f]$}i && -d } glob("$c/?");
     my $namer;
     if (@dirs2) {
         $namer = sub {
             my ($hash, $ext) = @_;
-            sprintf '%s/%s/%s/%s%s', $mroot, substr($hash,0,2), substr($hash,2,2), $hash, $ext;
+            sprintf '%s/%s/%s/%s%s', $c, substr($hash,0,2), substr($hash,2,2), $hash, $ext;
         }
     }
     elsif (@dirs1) {
         $namer = sub {
             my ($hash, $ext) = @_;
-            sprintf '%s/%s/%s%s', $mroot, substr($hash,0,2), $hash, $ext;
+            sprintf '%s/%s/%s%s', $c, substr($hash,0,2), $hash, $ext;
+        }
+    }
+    elsif (@dirs0) {
+        $namer = sub {
+            my ($hash, $ext) = @_;
+            sprintf '%s/%s/%s%s', $c, substr($hash,0,1), $hash, $ext;
         }
     }
     else {
         $namer = sub {
             my ($hash, $ext) = @_;
-            sprintf '%s/%s%s', $mroot, $hash, $ext;
+            sprintf '%s/%s%s', $c, $hash, $ext;
         }
     }
-    return $coll2namer{$coll} = $namer;
+    return $coll2namer{$c} = $namer;
 }
 
 sub usage_commands {
@@ -266,6 +300,17 @@ sub commands {
     }
     close $fh;
     return ([ sort { lc $a->[0] cmp lc $b->[0] } @commands ], $wcmd, $wargs);
+}
+
+sub read_conf {
+    my ($f) = @_;
+    open my $fh, '<', $f or fatal "open $f: $!";
+    while (<$fh>) {
+        next if /^\s*(?:#.*)?$/;  # Skip blank lines and comments
+        if (/^\s*(\S+)\s+(.*)$/) {
+            $conf{$1} = $2;
+        }
+    }
 }
 
 sub usage {
